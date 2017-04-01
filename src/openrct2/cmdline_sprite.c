@@ -17,8 +17,8 @@
 #include "cmdline_sprite.h"
 #include "drawing/drawing.h"
 #include "Imaging.h"
+#include "localisation/localisation.h"
 #include "OpenRCT2.h"
-#include "platform/platform.h"
 #include "util/util.h"
 
 #define MODE_DEFAULT 0
@@ -58,6 +58,22 @@ rct_sprite_file_header spriteFileHeader;
 rct_g1_element *spriteFileEntries;
 uint8 *spriteFileData;
 
+#ifdef _WIN32
+
+static FILE * fopen_utf8(const char * path, const char * mode)
+{
+    wchar_t * pathW = utf8_to_widechar(path);
+    wchar_t * modeW = utf8_to_widechar(mode);
+    FILE * file = _wfopen(pathW, modeW);
+    free(pathW);
+    free(modeW);
+    return file;
+}
+
+#define fopen fopen_utf8
+
+#endif
+
 static void sprite_file_load_palette(sint32 spriteIndex)
 {
 	rct_g1_element *g1 = &spriteFileEntries[spriteIndex];
@@ -87,14 +103,12 @@ static void sprite_entries_make_relative()
 
 static bool sprite_file_open(const utf8 *path)
 {
-	SDL_RWops *file;
-
-	file = SDL_RWFromFile(path, "rb");
+	FILE * file = fopen(path, "rb");
 	if (file == NULL)
 		return false;
 
-	if (SDL_RWread(file, &spriteFileHeader, sizeof(rct_sprite_file_header), 1) != 1) {
-		SDL_RWclose(file);
+	if (fread(&spriteFileHeader, sizeof(rct_sprite_file_header), 1, file) != 1) {
+		fclose(file);
 		return false;
 	}
 
@@ -102,21 +116,21 @@ static bool sprite_file_open(const utf8 *path)
 		sint32 openEntryTableSize = spriteFileHeader.num_entries * sizeof(rct_g1_element_32bit);
 		rct_g1_element_32bit * openElements = (rct_g1_element_32bit *)malloc(openEntryTableSize);
 		if (openElements == NULL) {
-			SDL_RWclose(file);
+			fclose(file);
 			return false;
 		}
 
-		if (SDL_RWread(file, openElements, openEntryTableSize, 1) != 1) {
+		if (fread(openElements, openEntryTableSize, 1, file) != 1) {
 			free(openElements);
-			SDL_RWclose(file);
+			fclose(file);
 			return false;
 		}
 
 		spriteFileData = malloc(spriteFileHeader.total_size);
-		if (SDL_RWread(file, spriteFileData, spriteFileHeader.total_size, 1) != 1) {
+		if (fread(spriteFileData, spriteFileHeader.total_size, 1, file) != 1) {
 			free(spriteFileData);
 			free(openElements);
-			SDL_RWclose(file);
+			fclose(file);
 			return false;
 		}
 
@@ -138,18 +152,18 @@ static bool sprite_file_open(const utf8 *path)
 		free(openElements);
 	}
 
-	SDL_RWclose(file);
+	fclose(file);
 	return true;
 }
 
 static bool sprite_file_save(const char *path)
 {
-	SDL_RWops *file = SDL_RWFromFile(path, "wb");
+	FILE * file = fopen(path, "wb");
 	if (file == NULL)
 		return false;
 
-	if (SDL_RWwrite(file, &spriteFileHeader, sizeof(rct_sprite_file_header), 1) != 1) {
-		SDL_RWclose(file);
+	if (fwrite(&spriteFileHeader, sizeof(rct_sprite_file_header), 1, file) != 1) {
+		fclose(file);
 		return false;
 	}
 
@@ -157,7 +171,7 @@ static bool sprite_file_save(const char *path)
 		sint32 saveEntryTableSize = spriteFileHeader.num_entries * sizeof(rct_g1_element_32bit);
 		rct_g1_element_32bit * saveElements = (rct_g1_element_32bit *)malloc(saveEntryTableSize);
 		if (saveElements == NULL) {
-			SDL_RWclose(file);
+			fclose(file);
 			return false;
 		}
 
@@ -174,20 +188,20 @@ static bool sprite_file_save(const char *path)
 			outElement->zoomed_offset = inElement->zoomed_offset;
 		}
 
-		if (SDL_RWwrite(file, saveElements, saveEntryTableSize, 1) != 1) {
+		if (fwrite(saveElements, saveEntryTableSize, 1, file) != 1) {
 			free(saveElements);
-			SDL_RWclose(file);
+			fclose(file);
 			return false;
 		}
 		free(saveElements);
 
-		if (SDL_RWwrite(file, spriteFileData, spriteFileHeader.total_size, 1) != 1) {
-			SDL_RWclose(file);
+		if (fwrite(spriteFileData, spriteFileHeader.total_size, 1, file) != 1) {
+			fclose(file);
 			return false;
 		}
 	}
 
-	SDL_RWclose(file);
+	fclose(file);
 	return true;
 }
 
@@ -643,7 +657,6 @@ sint32 cmdline_for_sprite(const char **argv, sint32 argc)
 		size_t resourceLength = strlen(resourcePath);
 
 		bool silent = (argc >= 4 && strcmp(argv[3], "silent") == 0);
-		SDL_RWops *file;
 
 		spriteFileHeader.num_entries = 0;
 		spriteFileHeader.total_size = 0;
@@ -651,6 +664,7 @@ sint32 cmdline_for_sprite(const char **argv, sint32 argc)
 
 		fprintf(stdout, "Building: %s\n", spriteFilePath);
 		sint32 i = 0;
+		FILE * file = NULL;
 		do {
 			// Create image path
 			safe_strcpy(imagePath, resourcePath, MAX_PATH);
@@ -660,9 +674,9 @@ sint32 cmdline_for_sprite(const char **argv, sint32 argc)
 			snprintf(filename, 16, "%d.png", i);
 			safe_strcat_path(imagePath, filename, MAX_PATH);
 
-			file = SDL_RWFromFile(imagePath, "r");
+			file = fopen(imagePath, "r");
 			if (file != NULL) {
-				SDL_RWclose(file);
+				fclose(file);
 				rct_g1_element spriteElement;
 				uint8 *buffer;
 				sint32 bufferLength;
